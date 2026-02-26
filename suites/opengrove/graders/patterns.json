@@ -1,0 +1,105 @@
+{
+  "description": "Deterministic pattern checks for T4 and T5. Each check has a pass/fail result.",
+  "checks": [
+    {
+      "id": "no-new-vector-db",
+      "description": "Must reuse sqlite-vec, not introduce a new vector database",
+      "applies_to": ["t4", "t5"],
+      "check_type": "dependency_forbidden",
+      "forbidden_packages": [
+        "chromadb", "pinecone-client", "@pinecone-database/pinecone",
+        "weaviate-client", "qdrant-client", "@qdrant/js-client-rest",
+        "milvus", "pg-vector", "pgvector", "faiss-node", "@xenova/transformers",
+        "vectordb", "lance", "lancedb"
+      ],
+      "file": "app/package.json",
+      "severity": "critical"
+    },
+    {
+      "id": "reuses-embeddings-module",
+      "description": "New search/embedding code should import from existing lib/embeddings",
+      "applies_to": ["t4"],
+      "check_type": "import_present",
+      "source_pattern": "Files added or modified in T4 that deal with search or embeddings",
+      "must_import_from": "lib/embeddings",
+      "severity": "high"
+    },
+    {
+      "id": "cost-tracking-integration-t4",
+      "description": "New API calls in T4 must integrate with the cost tracking system from T1",
+      "applies_to": ["t4"],
+      "check_type": "grep_new_files",
+      "must_contain_one_of": [
+        "trackCost", "track_cost", "updateCost", "tokenUsage",
+        "cost_tracking", "recordUsage", "logCost", "addCost",
+        "trackTokens", "recordTokens", "usage"
+      ],
+      "severity": "high",
+      "notes": "If the agent added new LLM/embedding API calls but none reference cost tracking, this fails"
+    },
+    {
+      "id": "cost-tracking-integration-t5",
+      "description": "New API calls in T5 must integrate with cost tracking",
+      "applies_to": ["t5"],
+      "check_type": "grep_new_files",
+      "must_contain_one_of": [
+        "trackCost", "track_cost", "updateCost", "tokenUsage",
+        "cost_tracking", "recordUsage", "logCost", "addCost",
+        "trackTokens", "recordTokens", "usage"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "pii-pipeline-integration-t4",
+      "description": "New outbound LLM calls in T4 must route through PII guardrail",
+      "applies_to": ["t4"],
+      "check_type": "grep_new_files",
+      "must_contain_one_of": [
+        "redactPII", "piiGuardrail", "sanitizePrompt", "redact_pii",
+        "pii_check", "guardPII", "piiFilter", "checkPII", "scanPII"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "pii-pipeline-integration-t5",
+      "description": "New outbound LLM calls in T5 must route through PII guardrail",
+      "applies_to": ["t5"],
+      "check_type": "grep_new_files",
+      "must_contain_one_of": [
+        "redactPII", "piiGuardrail", "sanitizePrompt", "redact_pii",
+        "pii_check", "guardPII", "piiFilter", "checkPII", "scanPII"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "message-reference-reuse",
+      "description": "T5 should reuse T2's message reference/quote pattern, not create a new system",
+      "applies_to": ["t5"],
+      "check_type": "import_present",
+      "source_pattern": "Files added or modified in T5 that reference messages",
+      "must_import_from": "Components or utilities created in T2 for quote-reply",
+      "severity": "high",
+      "notes": "This check needs to be customized after T2 runs — we need to know the actual component/util names"
+    },
+    {
+      "id": "no-new-top-level-dirs",
+      "description": "New code should go in existing directories (lib/, components/, api/), not create new top-level dirs",
+      "applies_to": ["t4", "t5"],
+      "check_type": "new_directory_check",
+      "forbidden_new_dirs": [
+        "search", "vector", "embeddings", "pii",
+        "services", "utils", "helpers", "modules"
+      ],
+      "base_path": "app/",
+      "severity": "medium"
+    },
+    {
+      "id": "nullable-columns",
+      "description": "New database columns should be nullable for backward compatibility (matching existing OpenGrove pattern)",
+      "applies_to": ["t4", "t5"],
+      "check_type": "schema_check",
+      "pattern": "New columns added to existing tables should not have NOT NULL without DEFAULT",
+      "severity": "medium"
+    }
+  ]
+}

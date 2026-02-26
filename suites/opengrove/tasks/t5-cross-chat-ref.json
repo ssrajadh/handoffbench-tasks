@@ -1,0 +1,13 @@
+{
+  "id": "t5",
+  "title": "Cross-chat context referencing",
+  "prompt": "Add the ability to reference context from another conversation. When I'm in one chat, I want to be able to attach or pull in context from a different conversation so the model can see it. For example, if I discussed a database schema design in Chat A, I should be able to reference that discussion when asking about implementation in Chat B.",
+  "patterns_expected": [
+    "message-reference-schema",
+    "quote-reply-ui-pattern",
+    "prompt-interception-pipeline",
+    "cost-schema-design",
+    "search-architecture"
+  ],
+  "patterns_established": []
+}

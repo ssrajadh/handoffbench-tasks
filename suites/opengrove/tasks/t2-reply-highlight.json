@@ -1,0 +1,11 @@
+{
+  "id": "t2",
+  "title": "Reply to highlighted message part",
+  "prompt": "Add the ability to reply to a specific part of a message. The user should be able to highlight/select text within any message in the chat, and then reply specifically to that highlighted portion. The quoted text should be visually shown in the reply, and the highlighted context should be sent to the model so it knows what the user is referring to.",
+  "patterns_expected": ["cost-schema-design"],
+  "patterns_established": [
+    "message-reference-schema",
+    "quote-reply-ui-pattern",
+    "referenced-context-api-injection"
+  ]
+}

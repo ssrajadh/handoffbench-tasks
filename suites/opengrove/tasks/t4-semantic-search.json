@@ -1,0 +1,15 @@
+{
+  "id": "t4",
+  "title": "Semantic search across conversations",
+  "prompt": "Add semantic search so I can search across all my conversations. I want a search bar in the sidebar where I can type a query and it finds relevant messages across all chats, ranked by relevance. Clicking a result should navigate to that conversation and scroll to the relevant message.",
+  "patterns_expected": [
+    "cost-schema-design",
+    "token-counting-pipeline",
+    "prompt-interception-pipeline",
+    "settings-schema-pattern"
+  ],
+  "patterns_established": [
+    "search-architecture",
+    "embedding-reuse-pattern"
+  ]
+}

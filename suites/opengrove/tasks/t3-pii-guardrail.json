@@ -1,0 +1,12 @@
+{
+  "id": "t3",
+  "title": "PII guardrail with local redaction",
+  "prompt": "Add an opt-in PII guardrail. When enabled, before any prompt is sent to a cloud API, it should be scanned to detect and redact sensitive information like names, emails, phone numbers, SSNs, and addresses. The redacted version gets sent to the cloud model. There should be a toggle in settings to enable/disable this. Use a local approach so PII never leaves the machine.",
+  "patterns_expected": ["cost-schema-design", "cost-display-ui-pattern"],
+  "patterns_established": [
+    "prompt-interception-pipeline",
+    "settings-schema-pattern",
+    "local-model-integration",
+    "pipeline-ordering"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "t1",
+  "title": "Cost tracking for models",
+  "prompt": "Add cost tracking to OpenGrove. I want to see how much each conversation costs me. Track token usage (input and output tokens) for every API call, calculate cost based on the model's pricing, and show a running cost total somewhere in the UI. Should work for all supported models. Each model has different per-token pricing.",
+  "patterns_expected": [],
+  "patterns_established": [
+    "cost-schema-design",
+    "token-counting-pipeline",
+    "per-model-pricing-config",
+    "cost-display-ui-pattern"
+  ]
+}

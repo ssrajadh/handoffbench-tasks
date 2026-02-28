@@ -1,6 +1,6 @@
 {
   "id": "t2",
-  "title": "Reply to highlighted message part",
+  "title": "Reply to message",
   "prompt": "Add the ability to reply to a specific message. Each message in the chat should have a reply button. Clicking it starts a reply that shows the original message as a quote. The quoted message should be visually displayed in the reply, and the quoted context should be sent to the model so it knows what the user is referring to.",
   "patterns_expected": ["cost-schema-design"],
   "patterns_established": [

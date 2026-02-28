@@ -2,7 +2,7 @@
   "name": "opengrove",
   "description": "Sequential feature tasks on OpenGrove chat app. Tests whether Agent B reuses patterns established by Agent A in T1-T3 when completing T4-T5.",
   "repo": "https://github.com/ssrajadh/opengrove",
-  "tasks": ["t1-cost-tracking", "t2-reply-highlight", "t3-pii-guardrail", "t4-semantic-search", "t5-cross-chat-ref"],
+  "tasks": ["t1-cost-tracking", "t2-reply-message", "t3-pii-guardrail", "t4-semantic-search", "t5-cross-chat-ref"],
   "establishment_tasks": ["t1", "t2", "t3"],
   "evaluation_tasks": ["t4", "t5"]
 }

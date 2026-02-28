@@ -50,7 +50,7 @@
     },
 
     "t2": {
-      "title": "Reply to highlighted message",
+      "title": "Reply to message",
       "files_changed": [
         "app/src/app/api/chat/route.ts",
         "app/src/app/page.tsx",

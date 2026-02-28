@@ -40,14 +40,15 @@ opengrove/
 │       │   ├── rag.ts              # RAG orchestrator: budget split, retrieval, context building
 │       │   ├── tokens.ts           # Token estimation, message windowing
 │       │   ├── embeddings.ts       # OpenAI embedding calls, chunking, store overflow
-│       │   ├── model-constants.ts  # Model ID mappings for Gemini and OpenAI
+│       │   ├── pii.ts              # PII redaction: redactPII() — regex + compromise NLP
+│       │   ├── model-constants.ts  # Model IDs, MODEL_PRICING, calculateCost()
 │       │   └── utils.ts            # cn() utility (clsx + tailwind-merge)
 │       └── types/
 │           └── index.ts            # Conversation, Message, ClientMessage, LineageEntry
 ```
 
 **What lives where:**
-- `lib/` — All server-side logic. `db.ts` is the data layer. `rag.ts`, `tokens.ts`, `embeddings.ts` form the RAG pipeline. No client code imports from `lib/`.
+- `lib/` — All server-side logic. `db.ts` is the data layer. `rag.ts`, `tokens.ts`, `embeddings.ts` form the RAG pipeline. `model-constants.ts` has pricing and cost calculation. `pii.ts` handles PII redaction. No client code imports from `lib/`.
 - `components/` — React client components. `ui/` contains Radix primitive wrappers. Top-level components (`Sidebar`, `MessageList`, `ChatInput`) are the app's UI building blocks.
 - `api/` — Next.js route handlers. Each route file exports `GET`, `POST`, or `DELETE` async functions. All routes use `export const dynamic = "force-dynamic"` to disable caching.
 - `types/` — Shared TypeScript interfaces used by both client and server.
@@ -79,6 +80,7 @@ CREATE TABLE messages (
   content TEXT NOT NULL,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   is_embedded INTEGER NOT NULL DEFAULT 0,       -- 1 = already chunked and stored in vector table
+  reply_to_id TEXT DEFAULT NULL,                -- FK to another message (added in T2)
   FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 );
 CREATE INDEX idx_messages_conversation ON messages(conversation_id);
@@ -92,7 +94,23 @@ CREATE TABLE settings (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 ```
-Supported keys: `openai_api_key`, `gemini_api_key`, `anthropic_api_key`, `default_model`, `hidden_models`, `local_models_enabled`, `local_runtime`, `local_endpoint`, `local_models_hidden`.
+Supported keys: `openai_api_key`, `gemini_api_key`, `anthropic_api_key`, `default_model`, `hidden_models`, `local_models_enabled`, `local_runtime`, `local_endpoint`, `local_models_hidden`, `pii_redaction_enabled`.
+
+**usage** (cost tracking — one row per assistant response)
+```sql
+CREATE TABLE usage (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_usage_conversation ON usage(conversation_id);
+```
 
 **embedding_config** (singleton)
 ```sql
@@ -127,7 +145,7 @@ Key details:
 
 ### Schema Migrations
 
-Columns added after initial schema (`parent_id`, `branch_point_index`, `is_embedded`) use try-catch `ALTER TABLE` — if the column already exists, the error is silently caught. This is the project's migration pattern. Follow it for any new columns.
+Columns added after initial schema (`parent_id`, `branch_point_index`, `is_embedded`, `reply_to_id`) use try-catch `ALTER TABLE` — if the column already exists, the error is silently caught. This is the project's migration pattern. Follow it for any new columns.
 
 ## 4. RAG Pipeline
 
@@ -277,7 +295,7 @@ The chat endpoint returns newline-delimited JSON (NDJSON):
 ```json
 {"type": "chunk", "text": "partial response..."}
 {"type": "chunk", "text": "more text..."}
-{"type": "done", "conversationId": "uuid", "message": {"role": "assistant", "content": "full text", "id": "uuid"}}
+{"type": "done", "conversationId": "uuid", "message": {"role": "assistant", "content": "full text", "id": "uuid"}, "usage": {"inputTokens": 150, "outputTokens": 42, "cost": 0.000123}}
 ```
 On error during streaming:
 ```json
@@ -303,7 +321,177 @@ API keys can come from two places (checked in order):
 
 The chat route checks both: `settings.openai_api_key?.trim() || process.env.OPENAI_API_KEY`.
 
-## 10. Key Gotchas
+## 10. Cost Tracking
+
+Defined across `lib/model-constants.ts`, `lib/db.ts`, and `api/chat/route.ts`.
+
+### Pricing Config
+
+`MODEL_PRICING` in `lib/model-constants.ts` maps model ID strings to `{ input: number; output: number }` per-token costs in USD. Prices are expressed as `X / 1e6` (per-million-token rate divided inline). Every supported cloud model has an entry. Local and unknown models return cost 0.
+
+```ts
+export const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  "gpt-4o":        { input: 2.50  / 1e6, output: 10.00 / 1e6 },
+  "gemini-2.0-flash": { input: 0.10 / 1e6, output: 0.40 / 1e6 },
+  // ...
+};
+```
+
+### Cost Calculation
+
+`calculateCost(model, inputTokens, outputTokens)` in `lib/model-constants.ts`. Looks up `MODEL_PRICING[model]`, returns `inputTokens * pricing.input + outputTokens * pricing.output`. Returns 0 if the model isn't in the pricing table.
+
+### Token Counting
+
+Token counts come from the provider response:
+- **OpenAI:** `event.response.usage.input_tokens` / `output_tokens` from the `response.completed` event
+- **Gemini:** `chunk.usageMetadata.promptTokenCount` / `candidatesTokenCount`
+- **Local:** `chunk.usage.prompt_tokens` / `completion_tokens`
+
+**Fallback:** If both counts are 0 after streaming completes, `estimateTokens()` (~4 chars/token) is used.
+
+### Storage
+
+After each assistant response in `api/chat/route.ts`:
+```ts
+const cost = calculateCost(modelKey, inputTokens, outputTokens);
+await insertUsage(randomUUID(), id, assistantMsgId, modelKey, inputTokens, outputTokens, cost);
+```
+
+`insertUsage()` writes a row to the `usage` table. `getConversationCost(conversationId)` aggregates with `SUM()` and returns `{ totalCost, totalInputTokens, totalOutputTokens }` (type `ConversationCost`).
+
+### API Endpoint
+
+`GET /api/conversations/[id]/cost` — returns `ConversationCost` JSON. Used by `page.tsx` on conversation load.
+
+### Client Display
+
+`page.tsx` state: `conversationCost` (number). Loaded from the cost endpoint via `fetchCost(id)` when switching conversations. Incrementally updated from the `done` stream event's `usage.cost` field. Displayed in the header as a monospace dollar amount — `toFixed(6)` if < $0.01, `toFixed(4)` otherwise.
+
+### Integration Rule
+
+**Any new code that makes LLM or embedding API calls must call `calculateCost()` and `insertUsage()` to record the usage.** If adding a new model, add its pricing to `MODEL_PRICING`.
+
+## 11. Message Reply System
+
+Defined across `lib/db.ts`, `types/index.ts`, `api/chat/route.ts`, `components/MessageList.tsx`, `components/ChatInput.tsx`, and `page.tsx`.
+
+### Schema
+
+The `messages` table has a `reply_to_id TEXT DEFAULT NULL` column (added via idempotent `ALTER TABLE` migration). It holds the UUID of the message being replied to.
+
+Types in `types/index.ts`:
+```ts
+type Message = { ..., reply_to_id?: string | null };      // DB-level (snake_case)
+type ClientMessage = { ..., replyToId?: string | null };   // Client-level (camelCase)
+```
+
+### DB Helpers
+
+- `getMessage(id)` — returns a single `Message` by UUID. Used to look up the quoted message for reply context.
+- `insertMessage(id, conversationId, role, content, replyToId?)` — accepts optional `replyToId`, stores as `reply_to_id`.
+
+### API Injection
+
+In `api/chat/route.ts`, after inserting the user message:
+1. If `replyToId` is present, look up the quoted message via `getMessage(replyToId)`.
+2. Build `replyContext` string: `[Replying to {role}: "{truncated content (300 chars)}"]`
+3. Prepend it to the last user message in the `history` array before sending to the provider.
+4. The raw user text is stored in the DB without this prefix — only the LLM sees it.
+
+```ts
+let replyContext: string | null = null;
+if (replyToId) {
+  const quotedMsg = await getMessage(replyToId);
+  if (quotedMsg) {
+    const truncated = quotedMsg.content.length > 300
+      ? quotedMsg.content.slice(0, 300) + "..." : quotedMsg.content;
+    replyContext = `[Replying to ${quotedMsg.role}: "${truncated}"]`;
+  }
+}
+// Later, prepend to last user message in history:
+if (replyContext && history.length > 0) {
+  const last = history[history.length - 1];
+  if (last.role === "user") {
+    last.content = replyContext + "\n\n" + last.content;
+  }
+}
+```
+
+### Client State
+
+`page.tsx`: `replyTo` state (`ClientMessage | null`). Set by `onReply` callback from MessageList, cleared on send and on new chat. The `replyToId` is included in the POST body to `/api/chat`.
+
+### UI Components
+
+**QuoteBlock** (in `components/MessageList.tsx`): Renders a compact left-bordered quote (120-char truncation) above any message that has `replyToId`. Uses `messageMap` (`Map<string, ClientMessage>`, built via `useMemo` over the messages array) for O(1) lookup.
+
+**Reply preview bar** (in `components/ChatInput.tsx`): When `replyTo` is set, shows a dismissable bar above the input with "Replying to {role}" label, truncated content (100 chars), and an X button (`onCancelReply`). Auto-focuses the textarea when entering reply mode.
+
+**Reply button**: Each message has a "↩ Reply" button in its hover actions (alongside Branch and Copy).
+
+### Integration Rule
+
+**To reference messages (within or across conversations), use `getMessage()` from `lib/db.ts` for lookup, `reply_to_id` / `replyToId` for storage, `QuoteBlock` for display, and the `[Replying to ...]` prefix for LLM context injection.** Don't build a parallel reference system.
+
+## 12. PII Guardrail
+
+Defined in `lib/pii.ts` with integration in `api/chat/route.ts` and `settings/page.tsx`.
+
+### How Redaction Works
+
+`redactPII(text: string): string` in `lib/pii.ts`. Two-phase detection:
+
+1. **Regex patterns** (run first): SSNs → `[SSN]`, credit cards → `[CREDIT_CARD]`, emails → `[EMAIL]`, US phone numbers → `[PHONE]`, US street addresses → `[ADDRESS]`.
+2. **NLP names** (run second, on already-regex-redacted text): Uses `compromise` library's `.people()` extraction. Deduplicates names, sorts longest-first, replaces with `[NAME]` using word-boundary regex.
+
+Regex runs first so `compromise` doesn't try to parse already-redacted placeholders. Everything runs locally — no network calls.
+
+### Pipeline Position
+
+In `api/chat/route.ts`, PII redaction happens **after** the full `history` array is assembled (including RAG context preamble and reply context injection) but **before** the history is sent to any provider:
+
+```
+build history → inject RAG context → inject reply context → PII redaction → send to provider
+```
+
+```ts
+if (settings.pii_redaction_enabled === "true" && !isLocalModel(modelKey)) {
+  for (const entry of history) {
+    entry.content = redactPII(entry.content);
+  }
+}
+```
+
+This means:
+- RAG context is redacted (good — it may contain PII from old messages).
+- Reply context prefix is redacted.
+- Original messages in the DB are **never modified**. Only the outbound `history` array is scrubbed.
+- Local models are exempt (data stays on-machine anyway).
+
+### Settings Toggle
+
+Setting key: `pii_redaction_enabled` (in `SUPPORTED_SETTINGS_KEYS`). Stored as `"true"` / `"false"` string. Toggle UI on `settings/page.tsx` General tab — same switch pattern as `local_models_enabled`.
+
+### Dependency
+
+`compromise` (v14, ~200KB) — NLP library for person name detection. Added to `app/package.json`. No other external dependencies.
+
+### Integration Rule
+
+**Any new code path that sends user content to a cloud LLM must check `settings.pii_redaction_enabled` and call `redactPII()` on the content before sending. Skip for local models (`isLocalModel(modelKey)`).**
+
+```ts
+import { redactPII } from "@/lib/pii";
+// After building history, before sending:
+if (settings.pii_redaction_enabled === "true" && !isLocalModel(modelKey)) {
+  for (const entry of history) {
+    entry.content = redactPII(entry.content);
+  }
+}
+```
+
+## 13. Key Gotchas
 
 1. **DB path is relative.** `process.cwd()` must be `app/` for the path `../opengrove.db` to resolve correctly. If you change how the app is started, the DB path will break.
 

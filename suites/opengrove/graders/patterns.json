@@ -116,6 +116,14 @@
       "pattern": "New columns added to existing tables should use DEFAULT NULL, not NOT NULL without DEFAULT",
       "reference_pattern": "try { db.exec('ALTER TABLE messages ADD COLUMN reply_to_id TEXT DEFAULT NULL'); } catch { }",
       "severity": "medium"
+    },
+    {
+      "id": "no-fts-fallback",
+      "description": "Should use vector/semantic search, not full-text keyword search",
+      "applies_to": ["t4"],
+      "check_type": "grep_forbidden",
+      "forbidden_patterns": ["fts5", "FTS5", "messages_fts", "bm25"],
+      "severity": "critical"
     }
   ]
 }

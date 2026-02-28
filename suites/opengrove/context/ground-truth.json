@@ -1,0 +1,182 @@
+{
+  "description": "Ground truth for T1-T3 implementations by Agent A. Documents actual decisions, patterns, and file changes for grading T4/T5.",
+
+  "tasks": {
+    "t1": {
+      "title": "Cost tracking for models",
+      "files_changed": [
+        "app/src/app/api/chat/route.ts",
+        "app/src/app/page.tsx",
+        "app/src/lib/db.ts",
+        "app/src/lib/model-constants.ts",
+        "app/src/app/api/conversations/[id]/cost/route.ts"
+      ],
+      "decisions": {
+        "schema": "New `usage` table: id, conversation_id (FK cascade), message_id, model, input_tokens, output_tokens, cost, created_at",
+        "pricing_location": "MODEL_PRICING record in lib/model-constants.ts — maps model string to { input: number, output: number } per-token costs",
+        "cost_calculation": "calculateCost(model, inputTokens, outputTokens) in lib/model-constants.ts — looks up MODEL_PRICING, returns total cost as number",
+        "storage": "insertUsage(id, conversationId, messageId, model, inputTokens, outputTokens, cost) in lib/db.ts — called after each assistant response",
+        "aggregation": "getConversationCost(conversationId) in lib/db.ts — returns ConversationCost { totalCost, totalInputTokens, totalOutputTokens }",
+        "api_endpoint": "GET /api/conversations/[id]/cost — returns ConversationCost JSON",
+        "ui_display": "Running cost shown in top right corner of page.tsx. State: conversationCost (number), fetched via fetchCost(id). Formats as toFixed(6) if < $0.01, else toFixed(4)",
+        "token_fallback": "If provider doesn't report token usage (inputTokens === 0 && outputTokens === 0), falls back to estimateTokens() heuristic (~4 chars/token)"
+      },
+      "patterns_established": {
+        "cost-schema-design": {
+          "description": "Usage table with per-message cost tracking. insertUsage() writes rows, getConversationCost() aggregates.",
+          "key_functions": ["insertUsage", "getConversationCost", "calculateCost"],
+          "key_types": ["ConversationCost"],
+          "key_constants": ["MODEL_PRICING"],
+          "files": ["lib/db.ts", "lib/model-constants.ts"]
+        },
+        "token-counting-pipeline": {
+          "description": "Token counts come from provider responses first, with estimateTokens() as fallback. Counts flow: provider → chat/route.ts variables (inputTokens, outputTokens) → calculateCost() → insertUsage().",
+          "key_functions": ["estimateTokens", "calculateCost", "insertUsage"],
+          "files": ["lib/tokens.ts", "lib/model-constants.ts", "app/api/chat/route.ts"]
+        },
+        "per-model-pricing-config": {
+          "description": "MODEL_PRICING record keyed by model string. calculateCost() looks up pricing and computes cost.",
+          "key_constants": ["MODEL_PRICING"],
+          "key_functions": ["calculateCost"],
+          "files": ["lib/model-constants.ts"]
+        },
+        "cost-display-ui-pattern": {
+          "description": "Client-side conversationCost state incremented from done event's usage.cost. Also fetched from /api/conversations/[id]/cost on conversation load.",
+          "key_state": ["conversationCost", "setConversationCost", "fetchCost"],
+          "stream_event": "{ type: 'done', usage: { inputTokens, outputTokens, cost } }",
+          "files": ["app/page.tsx", "app/api/conversations/[id]/cost/route.ts"]
+        }
+      }
+    },
+
+    "t2": {
+      "title": "Reply to highlighted message",
+      "files_changed": [
+        "app/src/app/api/chat/route.ts",
+        "app/src/app/page.tsx",
+        "app/src/components/ChatInput.tsx",
+        "app/src/components/MessageList.tsx",
+        "app/src/lib/db.ts",
+        "app/src/types/index.ts"
+      ],
+      "decisions": {
+        "schema": "Added reply_to_id TEXT DEFAULT NULL column to messages table via idempotent ALTER TABLE migration",
+        "db_helpers": "getMessage(id) returns single Message for quote lookup. insertMessage() accepts optional replyToId parameter.",
+        "types": "Message type: reply_to_id?: string | null. ClientMessage type: replyToId?: string | null.",
+        "api_injection": "replyToId in request body. Quoted message looked up via getMessage(replyToId). replyContext built as '[Replying to {role}: \"{truncated}\"]' and prepended to last user message in history array. Raw user text stored in DB without prefix.",
+        "state": "replyTo: Message | null state in page.tsx. Cleared on new chat and after send.",
+        "ui_quote": "QuoteBlock component in MessageList.tsx — renders compact left-bordered quote above messages with replyToId. Uses messageMap (Map<string, ClientMessage> via useMemo) for O(1) lookup.",
+        "ui_preview": "Reply preview bar in ChatInput.tsx — shows 'Replying to {role}' with truncated content (100 chars) and X cancel button. Auto-focuses textarea.",
+        "button_style": "Reply button uses emoji '↩ Reply' — noted as inconsistent with rest of design language"
+      },
+      "patterns_established": {
+        "message-reference-schema": {
+          "description": "reply_to_id nullable FK on messages table. getMessage() for single-message lookup. replyToId mapped from snake_case DB to camelCase client.",
+          "key_functions": ["getMessage", "insertMessage"],
+          "key_columns": ["reply_to_id"],
+          "key_types": ["Message.reply_to_id", "ClientMessage.replyToId"],
+          "files": ["lib/db.ts", "types/index.ts"]
+        },
+        "quote-reply-ui-pattern": {
+          "description": "QuoteBlock component for rendering quoted messages. messageMap for O(1) lookup. Reply preview bar in ChatInput with cancel.",
+          "key_components": ["QuoteBlock"],
+          "key_variables": ["messageMap", "replyTo"],
+          "key_props": ["onReply", "onCancelReply", "replyTo"],
+          "files": ["components/MessageList.tsx", "components/ChatInput.tsx", "app/page.tsx"]
+        },
+        "referenced-context-api-injection": {
+          "description": "Quoted message content prepended to user's message in LLM history as '[Replying to {role}: \"{content}\"]'. Only modifies the history array sent to LLM, not the stored DB message.",
+          "key_variables": ["replyContext"],
+          "injection_format": "[Replying to {role}: \"{truncated}\"]",
+          "files": ["app/api/chat/route.ts"]
+        }
+      }
+    },
+
+    "t3": {
+      "title": "PII guardrail with local redaction",
+      "files_changed": [
+        "app/src/lib/pii.ts",
+        "app/src/lib/db.ts",
+        "app/src/app/api/chat/route.ts",
+        "app/src/app/settings/page.tsx",
+        "app/package.json"
+      ],
+      "decisions": {
+        "new_file": "lib/pii.ts — exports redactPII(text: string): string. Uses regex patterns for structured PII (SSN, credit cards, emails, phones, addresses) then compromise NLP for person names.",
+        "dependency": "compromise (v14, ~200KB) for NLP-based person name detection. Runs entirely locally.",
+        "settings_key": "pii_redaction_enabled added to SUPPORTED_SETTINGS_KEYS in db.ts",
+        "pipeline_location": "In chat/route.ts, after history array is fully built (including RAG context and reply context). Checks: settings.pii_redaction_enabled === 'true' AND !isLocalModel(modelKey). Redacts every entry in history via redactPII(entry.content).",
+        "settings_ui": "Toggle on settings/page.tsx General tab. Same switch pattern as local_models_enabled.",
+        "db_integrity": "Original messages in DB are never modified. Only the outbound history array is redacted."
+      },
+      "patterns_established": {
+        "prompt-interception-pipeline": {
+          "description": "PII redaction applied to the history array in chat/route.ts after all context is assembled (RAG + reply) but before sending to provider. Conditional on settings and model type.",
+          "key_functions": ["redactPII"],
+          "key_import": "import { redactPII } from '@/lib/pii'",
+          "guard_condition": "settings.pii_redaction_enabled === 'true' && !isLocalModel(modelKey)",
+          "files": ["lib/pii.ts", "app/api/chat/route.ts"]
+        },
+        "settings-schema-pattern": {
+          "description": "New setting key added to SUPPORTED_SETTINGS_KEYS array. Stored as string 'true'/'false'. Parsed with parseBooleanSetting(). UI toggle on settings page.",
+          "key_array": "SUPPORTED_SETTINGS_KEYS",
+          "key_functions": ["getSettings", "upsertSettings", "parseBooleanSetting"],
+          "files": ["lib/db.ts", "app/settings/page.tsx"]
+        },
+        "pipeline-ordering": {
+          "description": "In chat/route.ts the pipeline order is: (1) get settings, (2) insert user message, (3) build reply context, (4) build RAG context + message window, (5) assemble history, (6) apply PII redaction, (7) stream to provider, (8) insert assistant message, (9) record usage/cost, (10) fire-and-forget embedding.",
+          "files": ["app/api/chat/route.ts"]
+        }
+      }
+    }
+  },
+
+  "handoff_critical_patterns": {
+    "description": "What a T4/T5 agent MUST know to correctly integrate with the existing codebase",
+
+    "cost_tracking": {
+      "how_it_works": "After every LLM response in chat/route.ts: (1) get token counts from provider or estimateTokens() fallback, (2) call calculateCost(modelKey, inputTokens, outputTokens), (3) call insertUsage(randomUUID(), conversationId, messageId, modelKey, inputTokens, outputTokens, cost). The done NDJSON event includes usage: { inputTokens, outputTokens, cost }.",
+      "what_t4_t5_must_do": "Any new API route that makes LLM or embedding API calls MUST call calculateCost() and insertUsage() to record token usage. If adding a new model, add its pricing to MODEL_PRICING.",
+      "key_imports": "import { calculateCost } from '@/lib/model-constants'; import { insertUsage } from '@/lib/db';"
+    },
+
+    "pii_redaction": {
+      "how_it_works": "In chat/route.ts, after the full history array is built, if pii_redaction_enabled === 'true' and model is not local, every history entry's content is passed through redactPII(). The function is in lib/pii.ts.",
+      "what_t4_t5_must_do": "Any new code path that sends user content to a cloud LLM must check pii_redaction_enabled and call redactPII() on the content before sending. Skip for local models.",
+      "key_imports": "import { redactPII } from '@/lib/pii'; // plus check settings.pii_redaction_enabled"
+    },
+
+    "reply_and_message_references": {
+      "how_it_works": "Messages can reference other messages via reply_to_id column. getMessage(id) looks up a single message. QuoteBlock component renders quoted content. messageMap provides O(1) client-side lookup.",
+      "what_t5_must_do": "Cross-chat context referencing should reuse the reply_to_id pattern or extend it, reuse QuoteBlock for rendering referenced messages, and use the same '[Replying to ...]' injection format for LLM context.",
+      "key_imports": "import { getMessage } from '@/lib/db'; // QuoteBlock is in components/MessageList.tsx"
+    },
+
+    "embeddings_and_rag": {
+      "how_it_works": "lib/embeddings.ts exports embedText(), embedTexts(), embedAndStoreOverflow(). Uses text-embedding-3-small (1536 dims). Chunks stored in message_chunks sqlite-vec table. lib/rag.ts exports buildContextWithRAG() for retrieval.",
+      "what_t4_must_do": "Semantic search MUST reuse embedText()/embedTexts() from lib/embeddings.ts and queryChunks() from lib/db.ts. Do NOT introduce a new vector DB or embedding system.",
+      "key_imports": "import { embedText } from '@/lib/embeddings'; import { queryChunks } from '@/lib/db';"
+    },
+
+    "settings_system": {
+      "how_to_add_setting": "1. Add key to SUPPORTED_SETTINGS_KEYS array in lib/db.ts. 2. Add a ? placeholder in getSettings() SQL. 3. Add UI control in settings/page.tsx. All values stored as strings.",
+      "existing_pattern": "Boolean settings use 'true'/'false' strings, parsed with parseBooleanSetting(). See pii_redaction_enabled and local_models_enabled for examples."
+    },
+
+    "db_migration": {
+      "pattern": "Idempotent ALTER TABLE in try-catch: try { db.exec('ALTER TABLE ... ADD COLUMN ... DEFAULT NULL'); } catch { /* already exists */ }",
+      "rule": "New columns MUST be nullable (DEFAULT NULL) for backward compatibility. Never use destructive migrations."
+    },
+
+    "streaming_protocol": {
+      "format": "NDJSON lines: { type: 'chunk', text }, { type: 'done', conversationId, message, usage: { inputTokens, outputTokens, cost } }, { type: 'error', error }",
+      "client_handling": "page.tsx reads with getReader(), splits on newlines, parses each JSON line. Done event updates state and increments conversationCost."
+    },
+
+    "code_organization": {
+      "rule": "New code goes in existing directories: lib/ for server logic, components/ for UI, app/api/ for routes. Do NOT create new top-level directories under app/src/.",
+      "naming": "DB functions: verb-first camelCase (getMessage, insertUsage). Constants: UPPER_SNAKE_CASE. Components: PascalCase. State: [thing, setThing]."
+    }
+  }
+}

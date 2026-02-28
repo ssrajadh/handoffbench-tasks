@@ -1,3 +1,5 @@
+feature: add PII redaction before sending prompt to cloud model
+
 diff:
  app/package-lock.json         | 35 +++++++++++++++++++++++++++++++++++
  app/package.json              |  1 +

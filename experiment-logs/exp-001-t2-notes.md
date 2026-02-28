@@ -1,3 +1,5 @@
+feature: add ability to reply to a specific message in the chat
+
 diff:
  app/src/app/api/chat/route.ts      |  26 +++++++++++++++++--
  app/src/app/page.tsx               |  24 +++++++++++++++--

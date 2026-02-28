@@ -1,3 +1,5 @@
+feature: add cost tracking to messages
+
  diff:
  app/src/app/api/chat/route.ts  | 26 +++++++++++++++++++++++++-
  app/src/app/page.tsx           | 33 +++++++++++++++++++++++++++++----

@@ -17,69 +17,84 @@
     },
     {
       "id": "reuses-embeddings-module",
-      "description": "New search/embedding code should import from existing lib/embeddings",
+      "description": "New search/embedding code should import from existing lib/embeddings (embedText, embedTexts, embedAndStoreOverflow)",
       "applies_to": ["t4"],
       "check_type": "import_present",
       "source_pattern": "Files added or modified in T4 that deal with search or embeddings",
       "must_import_from": "lib/embeddings",
+      "grep_patterns": ["embedText", "embedTexts", "embedAndStoreOverflow", "lib/embeddings", "@/lib/embeddings"],
       "severity": "high"
     },
     {
       "id": "cost-tracking-integration-t4",
-      "description": "New API calls in T4 must integrate with the cost tracking system from T1",
+      "description": "New API calls in T4 must integrate with the cost tracking system from T1 (insertUsage + calculateCost)",
       "applies_to": ["t4"],
       "check_type": "grep_new_files",
       "must_contain_one_of": [
-        "trackCost", "track_cost", "updateCost", "tokenUsage",
-        "cost_tracking", "recordUsage", "logCost", "addCost",
-        "trackTokens", "recordTokens", "usage"
+        "insertUsage", "calculateCost", "getConversationCost", "MODEL_PRICING",
+        "insertUsage(", "calculateCost(",
+        "trackCost", "recordUsage", "logCost", "addCost",
+        "trackTokens", "recordTokens"
       ],
       "severity": "high",
-      "notes": "If the agent added new LLM/embedding API calls but none reference cost tracking, this fails"
+      "notes": "Actual T1 functions: insertUsage() in lib/db.ts, calculateCost() in lib/model-constants.ts. If agent added new LLM/embedding API calls but none reference these, this fails."
     },
     {
       "id": "cost-tracking-integration-t5",
-      "description": "New API calls in T5 must integrate with cost tracking",
+      "description": "New API calls in T5 must integrate with cost tracking (insertUsage + calculateCost)",
       "applies_to": ["t5"],
       "check_type": "grep_new_files",
       "must_contain_one_of": [
-        "trackCost", "track_cost", "updateCost", "tokenUsage",
-        "cost_tracking", "recordUsage", "logCost", "addCost",
-        "trackTokens", "recordTokens", "usage"
+        "insertUsage", "calculateCost", "getConversationCost", "MODEL_PRICING",
+        "insertUsage(", "calculateCost(",
+        "trackCost", "recordUsage", "logCost", "addCost",
+        "trackTokens", "recordTokens"
       ],
-      "severity": "high"
+      "severity": "high",
+      "notes": "Actual T1 functions: insertUsage() in lib/db.ts, calculateCost() in lib/model-constants.ts."
     },
     {
       "id": "pii-pipeline-integration-t4",
-      "description": "New outbound LLM calls in T4 must route through PII guardrail",
+      "description": "New outbound LLM calls in T4 must route through PII guardrail (redactPII from lib/pii.ts)",
       "applies_to": ["t4"],
       "check_type": "grep_new_files",
       "must_contain_one_of": [
-        "redactPII", "piiGuardrail", "sanitizePrompt", "redact_pii",
-        "pii_check", "guardPII", "piiFilter", "checkPII", "scanPII"
+        "redactPII", "redactPII(", "lib/pii", "@/lib/pii",
+        "pii_redaction_enabled",
+        "piiGuardrail", "sanitizePrompt", "redact_pii",
+        "guardPII", "piiFilter", "checkPII", "scanPII"
       ],
-      "severity": "high"
+      "severity": "high",
+      "notes": "Actual T3 function: redactPII() in lib/pii.ts. Guard condition: settings.pii_redaction_enabled === 'true' && !isLocalModel(modelKey)"
     },
     {
       "id": "pii-pipeline-integration-t5",
-      "description": "New outbound LLM calls in T5 must route through PII guardrail",
+      "description": "New outbound LLM calls in T5 must route through PII guardrail (redactPII from lib/pii.ts)",
       "applies_to": ["t5"],
       "check_type": "grep_new_files",
       "must_contain_one_of": [
-        "redactPII", "piiGuardrail", "sanitizePrompt", "redact_pii",
-        "pii_check", "guardPII", "piiFilter", "checkPII", "scanPII"
+        "redactPII", "redactPII(", "lib/pii", "@/lib/pii",
+        "pii_redaction_enabled",
+        "piiGuardrail", "sanitizePrompt", "redact_pii",
+        "guardPII", "piiFilter", "checkPII", "scanPII"
       ],
-      "severity": "high"
+      "severity": "high",
+      "notes": "Actual T3 function: redactPII() in lib/pii.ts. Guard condition: settings.pii_redaction_enabled === 'true' && !isLocalModel(modelKey)"
     },
     {
       "id": "message-reference-reuse",
-      "description": "T5 should reuse T2's message reference/quote pattern, not create a new system",
+      "description": "T5 should reuse T2's message reference/quote pattern (QuoteBlock, messageMap, getMessage, reply_to_id), not create a new system",
       "applies_to": ["t5"],
       "check_type": "import_present",
-      "source_pattern": "Files added or modified in T5 that reference messages",
-      "must_import_from": "Components or utilities created in T2 for quote-reply",
+      "source_pattern": "Files added or modified in T5 that reference messages from other conversations",
+      "must_import_from": "lib/db or components/MessageList",
+      "grep_patterns": [
+        "QuoteBlock", "messageMap", "getMessage",
+        "reply_to_id", "replyToId", "replyContext",
+        "Replying to"
+      ],
       "severity": "high",
-      "notes": "This check needs to be customized after T2 runs — we need to know the actual component/util names"
+      "notes": "T2 established: QuoteBlock component in MessageList.tsx, getMessage() in lib/db.ts, reply_to_id column on messages, messageMap for O(1) lookup. T5 cross-chat references should extend this pattern."
     },
     {
       "id": "no-new-top-level-dirs",
@@ -90,15 +105,16 @@
         "search", "vector", "embeddings", "pii",
         "services", "utils", "helpers", "modules"
       ],
-      "base_path": "app/",
+      "base_path": "app/src/",
       "severity": "medium"
     },
     {
       "id": "nullable-columns",
-      "description": "New database columns should be nullable for backward compatibility (matching existing OpenGrove pattern)",
+      "description": "New database columns should be nullable (DEFAULT NULL) for backward compatibility, matching the reply_to_id migration pattern from T2",
       "applies_to": ["t4", "t5"],
       "check_type": "schema_check",
-      "pattern": "New columns added to existing tables should not have NOT NULL without DEFAULT",
+      "pattern": "New columns added to existing tables should use DEFAULT NULL, not NOT NULL without DEFAULT",
+      "reference_pattern": "try { db.exec('ALTER TABLE messages ADD COLUMN reply_to_id TEXT DEFAULT NULL'); } catch { }",
       "severity": "medium"
     }
   ]

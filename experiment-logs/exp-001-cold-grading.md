@@ -30,6 +30,7 @@
 | **no-new-top-level-dirs** | PASS | Only new file is `app/src/app/api/search/route.ts` — inside existing `api/` directory. |
 | **nullable-columns** | PASS | No new columns added to existing tables. Only new schema is the FTS5 virtual table + triggers. |
 | **no-fts-fallback** | **FAIL (critical)** | T4 uses SQLite FTS5 exclusively: `messages_fts` virtual table, `USING fts5(...)`, BM25 ranking via `messages_fts.rank`. This is keyword search, not semantic search. The existing `sqlite-vec` + `embedText()` infrastructure was completely ignored. |
+| **build-success-t5** | **FAIL(critical)** | Runtime crash: Tooltip used without TooltipProvider |
 
 ### Summary: 3 FAIL, 5 PASS, 2 PASS (vacuous)
 
@@ -74,3 +75,5 @@ The agent correctly inserted the cross-chat context into the existing `history` 
 In the cold handoff condition, Agent B implemented T4 search using SQLite FTS5 full-text keyword matching, despite the codebase already having a complete semantic search infrastructure. Agent A had built `sqlite-vec` with 1536-dimensional OpenAI embeddings, `embedText()` and `queryChunks()` functions, and a `message_chunks` table with existing embedded messages — all the building blocks for vector search. The result: search that can only find exact keyword matches rather than semantically relevant messages, making queries like "that discussion about performance" useless if the word "performance" never appeared.
 
 In the cold handoff condition, Agent B created a completely new `ContextRef` system for T5's cross-conversation referencing, despite T2 having established a message reference pattern with `reply_to_id`, `getMessage()`, and `QuoteBlock`. Agent A had designed a per-message reference system — storing the referenced message ID, looking it up for context injection, and rendering it as a compact quote block. The result: T5 can only reference entire conversations (dumping their full history into context), not specific messages, and the UI shows conversation titles as chips rather than quoted content — a fundamentally coarser and less useful interaction than extending the existing reply system would have provided.
+
+In the cold handoff condition, Agent B's T5 implementation broke the application entirely. The conversation picker UI used a Radix Tooltip component without wrapping it in a TooltipProvider, crashing the app on load. A context-aware agent would have seen how tooltips were used elsewhere in the codebase and followed the same pattern.

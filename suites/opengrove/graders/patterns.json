@@ -17,73 +17,70 @@
     },
     {
       "id": "reuses-embeddings-module",
-      "description": "New search/embedding code should import from existing lib/embeddings (embedText, embedTexts, embedAndStoreOverflow)",
+      "description": "New search/embedding code should import from existing lib/embeddings",
       "applies_to": ["t4"],
       "check_type": "import_present",
       "source_pattern": "Files added or modified in T4 that deal with search or embeddings",
       "must_import_from": "lib/embeddings",
-      "grep_patterns": ["embedText", "embedTexts", "embedAndStoreOverflow", "lib/embeddings", "@/lib/embeddings"],
-      "severity": "high"
+      "grep_patterns": [
+        "embedText", "embedTexts", "ensureEmbeddingConfig",
+        "embedAndStoreOverflow", "chunkMessages",
+        "lib/embeddings", "@/lib/embeddings"
+      ],
+      "severity": "high",
+      "notes": "Actual exports from lib/embeddings.ts: embedText(), embedTexts(), ensureEmbeddingConfig(), chunkMessages(), embedAndStoreOverflow(). Also exports constants EMBEDDING_MODEL and EMBEDDING_DIMENSIONS. For T4 search, the agent should at minimum use embedText() to embed the query and queryChunks() from lib/db.ts for KNN retrieval."
     },
     {
       "id": "cost-tracking-integration-t4",
-      "description": "New API calls in T4 must integrate with the cost tracking system from T1 (insertUsage + calculateCost)",
+      "description": "New API calls in T4 that hit paid endpoints (LLM or embedding) must track cost via calculateCost() + insertUsage()",
       "applies_to": ["t4"],
       "check_type": "grep_new_files",
       "must_contain_one_of": [
-        "insertUsage", "calculateCost", "getConversationCost", "MODEL_PRICING",
-        "insertUsage(", "calculateCost(",
-        "trackCost", "recordUsage", "logCost", "addCost",
-        "trackTokens", "recordTokens"
+        "insertUsage", "calculateCost", "getConversationCost",
+        "MODEL_PRICING", "model-constants"
       ],
       "severity": "high",
-      "notes": "Actual T1 functions: insertUsage() in lib/db.ts, calculateCost() in lib/model-constants.ts. If agent added new LLM/embedding API calls but none reference these, this fails."
+      "notes": "Actual T1 functions: calculateCost(model, inputTokens, outputTokens) in lib/model-constants.ts, insertUsage(id, conversationId, messageId, model, inputTokens, outputTokens, cost) in lib/db.ts. Experiment finding: A2 agent correctly used embedText() for semantic search but never called calculateCost()/insertUsage() on the embedding API call — embedding costs went untracked. If agent uses FTS5 instead of embeddings (no API calls), this check is vacuously satisfied but no-fts-fallback will catch it."
     },
     {
       "id": "cost-tracking-integration-t5",
-      "description": "New API calls in T5 must integrate with cost tracking (insertUsage + calculateCost)",
+      "description": "If T5 adds new paid API calls (beyond the existing chat flow), they must track cost",
       "applies_to": ["t5"],
       "check_type": "grep_new_files",
       "must_contain_one_of": [
-        "insertUsage", "calculateCost", "getConversationCost", "MODEL_PRICING",
-        "insertUsage(", "calculateCost(",
-        "trackCost", "recordUsage", "logCost", "addCost",
-        "trackTokens", "recordTokens"
+        "insertUsage", "calculateCost", "getConversationCost",
+        "MODEL_PRICING", "model-constants"
       ],
       "severity": "high",
-      "notes": "Actual T1 functions: insertUsage() in lib/db.ts, calculateCost() in lib/model-constants.ts."
+      "notes": "Actual T1 functions: calculateCost() in lib/model-constants.ts, insertUsage() in lib/db.ts. If T5 only injects cross-chat context into the existing chat/route.ts history array (no new API calls), cost tracking is inherited from the existing flow — check whether the agent added new API routes or just modified the chat route."
     },
     {
       "id": "pii-pipeline-integration-t4",
-      "description": "New outbound LLM calls in T4 must route through PII guardrail (redactPII from lib/pii.ts)",
+      "description": "New outbound API calls in T4 must check pii_redaction_enabled and call redactPII() before sending user content to cloud endpoints",
       "applies_to": ["t4"],
       "check_type": "grep_new_files",
       "must_contain_one_of": [
-        "redactPII", "redactPII(", "lib/pii", "@/lib/pii",
-        "pii_redaction_enabled",
-        "piiGuardrail", "sanitizePrompt", "redact_pii",
-        "guardPII", "piiFilter", "checkPII", "scanPII"
+        "redactPII", "lib/pii", "@/lib/pii",
+        "pii_redaction_enabled"
       ],
       "severity": "high",
-      "notes": "Actual T3 function: redactPII() in lib/pii.ts. Guard condition: settings.pii_redaction_enabled === 'true' && !isLocalModel(modelKey)"
+      "notes": "Actual T3 function: redactPII(text) in lib/pii.ts. Guard condition: settings.pii_redaction_enabled === 'true' && !isLocalModel(modelKey). Experiment finding: A2 agent's search route sends raw user query to embedText() (OpenAI API) without redacting PII. The agent fetched settings for the API key check but never applied PII redaction to the query. This applies to embedding calls too — any user content sent to a cloud endpoint needs PII coverage."
     },
     {
       "id": "pii-pipeline-integration-t5",
-      "description": "New outbound LLM calls in T5 must route through PII guardrail (redactPII from lib/pii.ts)",
+      "description": "Cross-chat context injected into the LLM prompt must go through PII redaction",
       "applies_to": ["t5"],
       "check_type": "grep_new_files",
       "must_contain_one_of": [
-        "redactPII", "redactPII(", "lib/pii", "@/lib/pii",
-        "pii_redaction_enabled",
-        "piiGuardrail", "sanitizePrompt", "redact_pii",
-        "guardPII", "piiFilter", "checkPII", "scanPII"
+        "redactPII", "lib/pii", "@/lib/pii",
+        "pii_redaction_enabled"
       ],
       "severity": "high",
-      "notes": "Actual T3 function: redactPII() in lib/pii.ts. Guard condition: settings.pii_redaction_enabled === 'true' && !isLocalModel(modelKey)"
+      "notes": "Actual T3 function: redactPII(text) in lib/pii.ts. If T5 injects cross-chat context into the history array before the existing redactPII loop in chat/route.ts (line ~166), PII coverage is inherited automatically. Check whether the injection point is before or after the redaction step. Both A1 and A2 agents placed injection before redaction — this tends to pass naturally."
     },
     {
       "id": "message-reference-reuse",
-      "description": "T5 should reuse T2's message reference/quote pattern (QuoteBlock, messageMap, getMessage, reply_to_id), not create a new system",
+      "description": "T5 should reuse T2's message reference infrastructure (getMessage, QuoteBlock, reply_to_id), not build a parallel system",
       "applies_to": ["t5"],
       "check_type": "import_present",
       "source_pattern": "Files added or modified in T5 that reference messages from other conversations",
@@ -94,7 +91,7 @@
         "Replying to"
       ],
       "severity": "high",
-      "notes": "T2 established: QuoteBlock component in MessageList.tsx, getMessage() in lib/db.ts, reply_to_id column on messages, messageMap for O(1) lookup. T5 cross-chat references should extend this pattern."
+      "notes": "T2 established: QuoteBlock component in MessageList.tsx, getMessage(id) in lib/db.ts, reply_to_id column on messages, messageMap (Map<string, ClientMessage>) for O(1) lookup, replyContext injection as '[Replying to {role}: \"{content}\"]'. Experiment finding: both A1 and A2 agents created a new ContextRef system that references entire conversations instead of individual messages. Neither used getMessage(), QuoteBlock, or reply_to_id. This may reflect a design tension — T5 naturally wants conversation-level granularity while T2 is message-level."
     },
     {
       "id": "no-new-top-level-dirs",
@@ -119,11 +116,21 @@
     },
     {
       "id": "no-fts-fallback",
-      "description": "Should use vector/semantic search, not full-text keyword search",
+      "description": "T4 must use vector/semantic search via sqlite-vec, not full-text keyword search",
       "applies_to": ["t4"],
       "check_type": "grep_forbidden",
-      "forbidden_patterns": ["fts5", "FTS5", "messages_fts", "bm25"],
-      "severity": "critical"
+      "forbidden_patterns": ["fts5", "FTS5", "messages_fts", "bm25", "MATCH ?"],
+      "severity": "critical",
+      "notes": "A1 (cold) agent built FTS5 full-text search instead of using the existing sqlite-vec + embeddings infrastructure. FTS5 is keyword matching, not semantic search. The task explicitly asks for semantic search ranked by relevance. MATCH ? is the FTS5 query syntax — if present it means the agent is using full-text search. Plain SQL INSTR/LIKE as a secondary fallback alongside semantic search is acceptable (A2 did this)."
+    },
+    {
+      "id": "build-success",
+      "description": "App must build successfully and not crash on load after T4/T5 changes",
+      "applies_to": ["t4", "t5"],
+      "check_type": "build",
+      "command": "cd app && npx next build",
+      "severity": "critical",
+      "notes": "A1 (cold) agent's T5 implementation crashed at runtime: the ChatInput conversation picker used a Radix Tooltip component without wrapping it in a TooltipProvider. The existing codebase uses TooltipProvider in both MessageList.tsx and ChatInput.tsx — the agent should have followed the same pattern. Check for: Tooltip without TooltipProvider, missing imports, type errors, and any other build/runtime failures."
     }
   ]
 }

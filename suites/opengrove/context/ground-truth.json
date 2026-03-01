@@ -138,25 +138,45 @@
     "cost_tracking": {
       "how_it_works": "After every LLM response in chat/route.ts: (1) get token counts from provider or estimateTokens() fallback, (2) call calculateCost(modelKey, inputTokens, outputTokens), (3) call insertUsage(randomUUID(), conversationId, messageId, modelKey, inputTokens, outputTokens, cost). The done NDJSON event includes usage: { inputTokens, outputTokens, cost }.",
       "what_t4_t5_must_do": "Any new API route that makes LLM or embedding API calls MUST call calculateCost() and insertUsage() to record token usage. If adding a new model, add its pricing to MODEL_PRICING.",
-      "key_imports": "import { calculateCost } from '@/lib/model-constants'; import { insertUsage } from '@/lib/db';"
+      "key_imports": "import { calculateCost } from '@/lib/model-constants'; import { insertUsage } from '@/lib/db';",
+      "experiment_notes": {
+        "observed_failure": "A2 agent correctly used embedText() for semantic search but never called calculateCost()/insertUsage() on the embedding API call. Embedding costs went untracked.",
+        "why_agents_miss_this": "Agents treat cost tracking as a chat-route concern, not something that applies to standalone API routes like search. The embedding call in search/route.ts is a one-shot call with no streaming, no assistant message, and no conversationId — it doesn't map neatly onto the chat route's cost tracking pattern.",
+        "grading_implication": "Check all new files that import from lib/embeddings or call any OpenAI/Gemini API for presence of calculateCost+insertUsage. Vacuous passes (A1 used FTS5 so had no API calls to track) should be flagged separately from genuine passes."
+      }
     },
 
     "pii_redaction": {
       "how_it_works": "In chat/route.ts, after the full history array is built, if pii_redaction_enabled === 'true' and model is not local, every history entry's content is passed through redactPII(). The function is in lib/pii.ts.",
       "what_t4_t5_must_do": "Any new code path that sends user content to a cloud LLM must check pii_redaction_enabled and call redactPII() on the content before sending. Skip for local models.",
-      "key_imports": "import { redactPII } from '@/lib/pii'; // plus check settings.pii_redaction_enabled"
+      "key_imports": "import { redactPII } from '@/lib/pii'; // plus check settings.pii_redaction_enabled",
+      "experiment_notes": {
+        "observed_failure": "A2 agent's search route sends the raw user query to embedText(query) — an OpenAI API call — without redacting PII first. The agent fetched settings (to check for API key) but never checked pii_redaction_enabled or called redactPII().",
+        "why_agents_miss_this": "Agents think of PII redaction as a chat-history concern (scrub the conversation before sending to LLM) and don't generalize it to embedding API calls. The search query is short (not a conversation history) and goes to an embedding endpoint (not a chat completion), so agents don't pattern-match it to the existing PII pipeline.",
+        "subtle_distinction": "T5 cross-chat context passes through PII redaction automatically because it's injected into the history array before the existing redactPII loop. T4 search is a separate API route with its own code path, so PII coverage requires explicit integration."
+      }
     },
 
     "reply_and_message_references": {
       "how_it_works": "Messages can reference other messages via reply_to_id column. getMessage(id) looks up a single message. QuoteBlock component renders quoted content. messageMap provides O(1) client-side lookup.",
       "what_t5_must_do": "Cross-chat context referencing should reuse the reply_to_id pattern or extend it, reuse QuoteBlock for rendering referenced messages, and use the same '[Replying to ...]' injection format for LLM context.",
-      "key_imports": "import { getMessage } from '@/lib/db'; // QuoteBlock is in components/MessageList.tsx"
+      "key_imports": "import { getMessage } from '@/lib/db'; // QuoteBlock is in components/MessageList.tsx",
+      "experiment_notes": {
+        "observed_failure": "Both A1 and A2 agents created a new ContextRef system ({ id, title }) that references entire conversations, not individual messages. Neither used getMessage(), QuoteBlock, messageMap, or reply_to_id from T2.",
+        "why_agents_miss_this": "T5's use case (pull in context from another conversation) feels like a different problem than T2's (reply to a specific message). Agents design conversation-level referencing as a new feature rather than extending message-level referencing. The existing reply system stores a single message ID — there's no obvious way to stretch that to 'attach an entire conversation as context'.",
+        "design_tension": "The integration rule says to extend T2's system, but T5 naturally wants conversation-level granularity. This may be an inherently hard pattern to test — the 'right' answer requires agents to build per-message cross-chat referencing (pick specific messages from other conversations) rather than the conversation-level dump that both agents independently converged on."
+      }
     },
 
     "embeddings_and_rag": {
       "how_it_works": "lib/embeddings.ts exports embedText(), embedTexts(), embedAndStoreOverflow(). Uses text-embedding-3-small (1536 dims). Chunks stored in message_chunks sqlite-vec table. lib/rag.ts exports buildContextWithRAG() for retrieval.",
       "what_t4_must_do": "Semantic search MUST reuse embedText()/embedTexts() from lib/embeddings.ts and queryChunks() from lib/db.ts. Do NOT introduce a new vector DB or embedding system.",
-      "key_imports": "import { embedText } from '@/lib/embeddings'; import { queryChunks } from '@/lib/db';"
+      "key_imports": "import { embedText } from '@/lib/embeddings'; import { queryChunks } from '@/lib/db';",
+      "experiment_notes": {
+        "observed_failure": "A1 (cold) ignored the entire embedding/vector infrastructure and built FTS5 keyword search instead. A2 (with agents.md) correctly used embedText + queryChunks for semantic search.",
+        "why_a1_missed_this": "Without documentation, the agent saw 'search across conversations' and reached for the simplest tool: full-text search. FTS5 is a well-known SQLite feature that requires no API keys, no async embedding calls, and no understanding of the existing vector pipeline. The sqlite-vec + embeddings infrastructure is non-obvious to discover by reading code alone.",
+        "what_fixed_it": "agents.md sections 5-6 explicitly documented the embedding system with function signatures, and section 10 stated 'Any new code that makes embedding API calls must...' — this was enough to steer A2 toward the correct architecture."
+      }
     },
 
     "settings_system": {
@@ -177,6 +197,14 @@
     "code_organization": {
       "rule": "New code goes in existing directories: lib/ for server logic, components/ for UI, app/api/ for routes. Do NOT create new top-level directories under app/src/.",
       "naming": "DB functions: verb-first camelCase (getMessage, insertUsage). Constants: UPPER_SNAKE_CASE. Components: PascalCase. State: [thing, setThing]."
+    },
+
+    "experiment_meta": {
+      "description": "Cross-cutting observations from A1/A2 experiments about how agents handle integration requirements.",
+      "architectural_vs_integration_rules": "Agents follow architectural guidance well (use this module, reuse this component) but miss cross-cutting integration rules (track costs, redact PII) when applied to novel code paths. A2 correctly used embedText() for search (architectural win) but forgot to track costs or redact PII on that same call (integration miss).",
+      "piggyback_vs_standalone": "Integration checks pass automatically when new code flows through an existing pipeline (T5 cross-chat context → existing history array → existing PII/cost handling). They fail when new code creates a standalone path (T4 search route → direct embedText() call → no pipeline coverage). Graders should distinguish these cases.",
+      "convergent_design_choices": "Both agents independently built conversation-level ContextRef systems for T5, suggesting this is the natural design for 'reference another conversation'. Per-message cross-chat referencing (extending T2) may be an unrealistic expectation unless the task prompt explicitly asks for it.",
+      "documentation_impact": "agents.md fixed the critical architectural failures (FTS5→semantic search, Tooltip crash) but did not prevent integration-detail misses (cost tracking on embeddings, PII on search queries). Documentation steers high-level decisions but agents still miss checklist-style requirements on novel code paths."
     }
   }
 }
